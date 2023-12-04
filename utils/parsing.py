@@ -201,5 +201,8 @@ def parse_train_args(args=sys.argv[1:]):
     parser.add_argument('--lig_mpnn_layers', type=int, default=0, help='')
 
 
+    # Optional parameters for CS 236 Extension
+    parser.add_argument('--all_sidechains_as_ligand', action='store_true', default=False, help='')
+
     args = parser.parse_args(args)
     return args
