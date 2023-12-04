@@ -18,7 +18,10 @@ HarmonicFlow multi-ligand structure generation gif:
 We will set up the environment using [Anaconda](https://docs.anaconda.com/anaconda/install/index.html).
 This is an example for how to set up a working conda environment to run the code. Make sure that the pytorch and pytorch-geometric versions you use are compatible with each other. Also, if you do not use a GPU, use `cpu` instead of `cu121` in the last line (also make sure that you use the correct cuda version if you do have a gpu).
 
+    module load cuda/12.1.1
+    
     conda create -c conda-forge -n flowsite rdkit python=3.10.12
+    
     pip install torch torchvision torchaudio
     pip install torch_geometric
     pip install pyyaml wandb biopython spyrmsd einops biopandas plotly prody tqdm lightning imageio
