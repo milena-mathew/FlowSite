@@ -194,6 +194,17 @@ class ComplexDataset(Dataset):
             data['ligand'].fake_lig_type = 'None'
             data['ligand'].rdkit_lig = "None"
             data.num_ligs = torch.tensor(len(valid_ids))
+            if self.args.sidechain_with_ligand:
+                try:
+                    sidechain_id = self.get_fake_lig_id(data, idx)
+                    if sidechain_id is None: # no fake ligand found
+                        lg(f'No valid sidechains for fake ligands in {data.pdb_id}. Trying a new random complex instead now.')
+                        return self.get(torch.randint(low=0, high=self.len(), size=(1,)).item())
+                except Exception as e:
+                    lg(f'ERROR: Failed to get fake_lig_id for {data.pdb_id} due to an error in get_fake_lig_id. Trying a new random complex instead now.')
+                    lg(e)
+                    return self.get(torch.randint(low=0, high=self.len(), size=(1,)).item())
+                data = self.add_sidechain(data, sidechain_id)
 
         # get designable mask on designable residues
         data['protein'].designable_mask = torch.zeros_like(data['protein'].min_lig_dist).bool()
@@ -311,6 +322,45 @@ class ComplexDataset(Dataset):
         data['ligand'].pos -= data.pocket_center
         return data
 
+    def add_sidechain(self, data, sidechain_id):
+        fake_lig_atom_names = data['protein'].atom_names[data['protein'].atom_res_idx == sidechain_id]
+        # Leaving this in, looks like outside of this function fake_lig_type is only used to name something 
+        # so hopefully leaving this to change within the loop is fine eek
+        data['ligand'].fake_lig_type = seq1(atom_features_list['residues_canonical'][data['protein'].feat[sidechain_id][0]])
+        if data['protein'].feat[sidechain_id][0].item() == len(atom_features_list['residues_canonical']) - 1:
+            lg(f'Warning, {data.pdb_id} has non canonical amino acid at lig_id {sidechain_id} and pdb_res_id {data["protein"].pdb_res_id[sidechain_id]} and pdb_chain_id {data["protein"].pdb_chain_id[sidechain_id]}. Trying a new random complex instead now.')
+            return False
+        if not len(fake_lig_atom_names) == len(amino_acid_atom_names[data['ligand'].fake_lig_type]) or not np.all(np.array(fake_lig_atom_names) == amino_acid_atom_names[data['ligand'].fake_lig_type]):
+            lg(f'Warning, {data.pdb_id} with amino acid {data["ligand"].fake_lig_type} has atom names {fake_lig_atom_names} instead of {amino_acid_atom_names[data["ligand"].fake_lig_type]}. Trying a new random complex instead now. The fake_lig_id is {sidechain_id} and pdb_res_id {data["protein"].pdb_res_id[sidechain_id]} and pdb_chain_id {data["protein"].pdb_chain_id[sidechain_id]}. Trying a new random complex instead now.')
+            return False
+
+        res_pos = data['protein'].atom_pos[data['protein'].atom_res_idx == sidechain_id]
+        sidechain_pos = res_pos[1:]
+
+        rdkit_res = RemoveHs(Chem.MolFromFASTA(data['ligand'].fake_lig_type))
+        edit_mol = Chem.EditableMol(rdkit_res)
+
+        # remove the Nitrogen at the beginning and the Oxygen at the end which is the OH of the acid group (maybe one should instead replace it with the C of the next residue)
+        remove_atoms = [0, rdkit_res.GetNumAtoms() - 1]
+        for idx in sorted(remove_atoms, reverse=True):
+            edit_mol.RemoveAtom(idx)
+        
+        lig = read_molecule(os.path.join(self.data_dir, data['pdb_id'], data['ligand'].name))
+        combo = Chem.CombineMols(lig, edit_mol.GetMol())
+
+        # add positions to rdkit ligand
+        conformer = Chem.Conformer(combo.GetNumAtoms())
+        for atom_idx, coord in enumerate(torch.cat((data['ligand'].pos, sidechain_pos))):
+            conformer.SetAtomPosition(atom_idx, Point3D(*(coord.tolist())))
+        combo.AddConformer(conformer)
+
+        # sanitize lig and
+        Chem.SanitizeMol(combo)
+        init_lig_graph(self.args, combo, data)
+        data['ligand'].rdkit_lig = combo
+        data['ligand'].num_components = np.array([2])
+        return data
+
     def get_fake_lig_id(self, data, idx):
         # remove residues that are close in the chain and less than 12A away
         arange = torch.arange(len(data['protein'].pos))
@@ -325,12 +375,9 @@ class ComplexDataset(Dataset):
             lg(f'Warning, no valid fake residues for {data.pdb_id} with idx {idx}, returning None now such that a new complex can be chosen.')
             return None
         else:
-            if args.all_sidechains_as_ligand:
-                return valid_fake_lig_ids
-            else:
-                fake_lig_id = valid_fake_lig_ids[torch.randint(low=0, high=len(valid_fake_lig_ids), size=(1,))]
-                data['protein'].fake_lig_id = fake_lig_id
-                return fake_lig_id
+            fake_lig_id = valid_fake_lig_ids[torch.randint(low=0, high=len(valid_fake_lig_ids), size=(1,))]
+            data['protein'].fake_lig_id = fake_lig_id
+            return fake_lig_id
 
     def update_data(self, data1: 'HeteroData', data2: 'HeteroData') -> 'HeteroData':
         for store in data2.stores:
@@ -339,89 +386,39 @@ class ComplexDataset(Dataset):
         return data1
 
     def init_fake_lig(self, data, fake_lig_id):
-        if args.all_sidechains_as_ligand:
-            # construct the ligand
-            fake_lig_indices = None
-            all_mols = []
-            for lig_id in fake_lig_id:
-                fake_lig_atom_names = data['protein'].atom_names[data['protein'].atom_res_idx == lig_id]
-                # Leaving this in, looks like outside of this function fake_lig_type is only used to name something 
-                # so hopefully leaving this to change within the loop is fine eek
-                data['ligand'].fake_lig_type = seq1(atom_features_list['residues_canonical'][data['protein'].feat[lig_id][0]])
-                if data['protein'].feat[lig_id][0].item() == len(atom_features_list['residues_canonical']) - 1:
-                    lg(f'Warning, {data.pdb_id} has non canonical amino acid at lig_id {lig_id} and pdb_res_id {data["protein"].pdb_res_id[lig_id]} and pdb_chain_id {data["protein"].pdb_chain_id[lig_id]}. Trying a new random complex instead now.')
-                    return False
-                if not len(fake_lig_atom_names) == len(amino_acid_atom_names[data['ligand'].fake_lig_type]) or not np.all(np.array(fake_lig_atom_names) == amino_acid_atom_names[data['ligand'].fake_lig_type]):
-                    lg(f'Warning, {data.pdb_id} with amino acid {data["ligand"].fake_lig_type} has atom names {fake_lig_atom_names} instead of {amino_acid_atom_names[data["ligand"].fake_lig_type]}. Trying a new random complex instead now. The fake_lig_id is {lig_id} and pdb_res_id {data["protein"].pdb_res_id[lig_id]} and pdb_chain_id {data["protein"].pdb_chain_id[lig_id]}. Trying a new random complex instead now.')
-                    return False
+        # construct the ligand
+        fake_lig_atom_names = data['protein'].atom_names[data['protein'].atom_res_idx == fake_lig_id]
+        data['ligand'].fake_lig_type = seq1(atom_features_list['residues_canonical'][data['protein'].feat[fake_lig_id][0]])
+        if data['protein'].feat[fake_lig_id][0].item() == len(atom_features_list['residues_canonical']) - 1:
+            lg(f'Warning, {data.pdb_id} has non canonical amino acid at fake_lig_id {fake_lig_id} and pdb_res_id {data["protein"].pdb_res_id[fake_lig_id]} and pdb_chain_id {data["protein"].pdb_chain_id[fake_lig_id]}. Trying a new random complex instead now.')
+            return False
+        if not len(fake_lig_atom_names) == len(amino_acid_atom_names[data['ligand'].fake_lig_type]) or not np.all(np.array(fake_lig_atom_names) == amino_acid_atom_names[data['ligand'].fake_lig_type]):
+            lg(f'Warning, {data.pdb_id} with amino acid {data["ligand"].fake_lig_type} has atom names {fake_lig_atom_names} instead of {amino_acid_atom_names[data["ligand"].fake_lig_type]}. Trying a new random complex instead now. The fake_lig_id is {fake_lig_id} and pdb_res_id {data["protein"].pdb_res_id[fake_lig_id]} and pdb_chain_id {data["protein"].pdb_chain_id[fake_lig_id]}. Trying a new random complex instead now.')
+            return False
 
-                sidechain_indices = data['protein'].atom_res_idx == lig_id
-                sidechain_indices[sidechain_indices.index(True)] = False
-                if fake_lig_indices = None:
-                    fake_lig_indices = sidechain_indices
-                else:
-                    fake_lig_indices = [a or b for a, b in zip(fake_lig_indices, sidechain_indices)]     
+        res_pos = data['protein'].atom_pos[data['protein'].atom_res_idx == fake_lig_id]
 
-                rdkit_res = RemoveHs(Chem.MolFromFASTA(data['ligand'].fake_lig_type))
-                edit_mol = Chem.EditableMol(rdkit_res)
+        fake_lig_pos = res_pos[1:] # drop the nitrogen position. If you remove more coordinates here than just the N, then you also have to change the min distance calculation in the preprocessing in get_inter_res_distances
+        rdkit_res = RemoveHs(Chem.MolFromFASTA(data['ligand'].fake_lig_type))
+        edit_mol = Chem.EditableMol(rdkit_res)
 
-                # remove the Nitrogen at the beginning and the Oxygen at the end which is the OH of the acid group (maybe one should instead replace it with the C of the next residue)
-                remove_atoms = [0, rdkit_res.GetNumAtoms() - 1]
-                for idx in sorted(remove_atoms, reverse=True):
-                    edit_mol.RemoveAtom(idx)
-                all_mols.append(edit_mol)
+        # remove the Nitrogen at the beginning and the Oxygen at the end which is the OH of the acid group (maybe one should instead replace it with the C of the next residue)
+        remove_atoms = [0, rdkit_res.GetNumAtoms() - 1]
+        for idx in sorted(remove_atoms, reverse=True):
+            edit_mol.RemoveAtom(idx)
+        lig = edit_mol.GetMol()
 
-            lig = chem.Mol()
-            for mol in all_mols:
-                lig = Chem.CombineMols(combo, mol.getMol())
+        # add positions to rdkit ligand
+        assert len(fake_lig_pos) == lig.GetNumAtoms()
+        conformer = Chem.Conformer(lig.GetNumAtoms())
+        for atom_idx, coord in enumerate(fake_lig_pos):
+            conformer.SetAtomPosition(atom_idx, Point3D(*(coord.tolist())))
+        lig.AddConformer(conformer)
 
-            # add positions to rdkit ligand
-            fake_lig_pos = data['protein'].atom_pos[fake_lig_indices]
-            assert len(fake_lig_pos) == lig.GetNumAtoms()
-            conformer = Chem.Conformer(lig.GetNumAtoms())
-            for atom_idx, coord in enumerate(fake_lig_pos):
-                conformer.SetAtomPosition(atom_idx, Point3D(*(coord.tolist())))
-            lig.AddConformer(conformer)
-
-            # sanitize lig and
-            Chem.SanitizeMol(lig)
-            init_lig_graph(self.args, lig, data)
-            data['ligand'].rdkit_lig = lig
-            
-        else:
-            # construct the ligand
-            fake_lig_atom_names = data['protein'].atom_names[data['protein'].atom_res_idx == fake_lig_id]
-            data['ligand'].fake_lig_type = seq1(atom_features_list['residues_canonical'][data['protein'].feat[fake_lig_id][0]])
-            if data['protein'].feat[fake_lig_id][0].item() == len(atom_features_list['residues_canonical']) - 1:
-                lg(f'Warning, {data.pdb_id} has non canonical amino acid at fake_lig_id {fake_lig_id} and pdb_res_id {data["protein"].pdb_res_id[fake_lig_id]} and pdb_chain_id {data["protein"].pdb_chain_id[fake_lig_id]}. Trying a new random complex instead now.')
-                return False
-            if not len(fake_lig_atom_names) == len(amino_acid_atom_names[data['ligand'].fake_lig_type]) or not np.all(np.array(fake_lig_atom_names) == amino_acid_atom_names[data['ligand'].fake_lig_type]):
-                lg(f'Warning, {data.pdb_id} with amino acid {data["ligand"].fake_lig_type} has atom names {fake_lig_atom_names} instead of {amino_acid_atom_names[data["ligand"].fake_lig_type]}. Trying a new random complex instead now. The fake_lig_id is {fake_lig_id} and pdb_res_id {data["protein"].pdb_res_id[fake_lig_id]} and pdb_chain_id {data["protein"].pdb_chain_id[fake_lig_id]}. Trying a new random complex instead now.')
-                return False
-
-            res_pos = data['protein'].atom_pos[data['protein'].atom_res_idx == fake_lig_id]
-
-            fake_lig_pos = res_pos[1:] # drop the nitrogen position. If you remove more coordinates here than just the N, then you also have to change the min distance calculation in the preprocessing in get_inter_res_distances
-            rdkit_res = RemoveHs(Chem.MolFromFASTA(data['ligand'].fake_lig_type))
-            edit_mol = Chem.EditableMol(rdkit_res)
-
-            # remove the Nitrogen at the beginning and the Oxygen at the end which is the OH of the acid group (maybe one should instead replace it with the C of the next residue)
-            remove_atoms = [0, rdkit_res.GetNumAtoms() - 1]
-            for idx in sorted(remove_atoms, reverse=True):
-                edit_mol.RemoveAtom(idx)
-            lig = edit_mol.GetMol()
-
-            # add positions to rdkit ligand
-            assert len(fake_lig_pos) == lig.GetNumAtoms()
-            conformer = Chem.Conformer(lig.GetNumAtoms())
-            for atom_idx, coord in enumerate(fake_lig_pos):
-                conformer.SetAtomPosition(atom_idx, Point3D(*(coord.tolist())))
-            lig.AddConformer(conformer)
-
-            # sanitize lig and
-            Chem.SanitizeMol(lig)
-            init_lig_graph(self.args, lig, data)
-            data['ligand'].rdkit_lig = lig            
+        # sanitize lig and
+        Chem.SanitizeMol(lig)
+        init_lig_graph(self.args, lig, data)
+        data['ligand'].rdkit_lig = lig            
         '''
         pdb_id = data.pdb_id
         os.makedirs(f"data/{pdb_id}_sidechain_vis", exist_ok=True)
