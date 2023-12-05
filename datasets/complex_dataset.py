@@ -22,6 +22,7 @@ from utils.featurize import read_molecule, featurize_prody, init_lig_graph, atom
 from utils.logging import lg
 from utils.mmcif import RESTYPES
 from utils.residue_constants import amino_acid_atom_names, af2_latest_excluded_ligs
+from utils.visualize import PDBFile
 
 
 class EmptyPocketException(Exception):
@@ -345,9 +346,8 @@ class ComplexDataset(Dataset):
         for idx in sorted(remove_atoms, reverse=True):
             edit_mol.RemoveAtom(idx)
         
-        lig = read_molecule(os.path.join(self.data_dir, data['pdb_id'], data['ligand'].name))
+        lig = read_molecule(os.path.join(self.data_dir, data['pdb_id'], data['ligand'].name), sanitize=True, remove_hs=True)
         combo = Chem.CombineMols(lig, edit_mol.GetMol())
-
         # add positions to rdkit ligand
         conformer = Chem.Conformer(combo.GetNumAtoms())
         for atom_idx, coord in enumerate(torch.cat((data['ligand'].pos, sidechain_pos))):
@@ -359,6 +359,15 @@ class ComplexDataset(Dataset):
         init_lig_graph(self.args, combo, data)
         data['ligand'].rdkit_lig = combo
         data['ligand'].num_components = np.array([2])
+
+        # import shutil
+        # pdb_id = data.pdb_id
+        # os.makedirs(f"data/{pdb_id}_sidechain_vis", exist_ok=True)
+        # shutil.copy(os.path.join(self.data_dir, pdb_id, f'{pdb_id}_ligand.mol2'), os.path.join(f"data/{pdb_id}_sidechain_vis", f'{pdb_id}_ligand.mol2'))
+        # shutil.copy(os.path.join(self.data_dir, pdb_id, f'{pdb_id}_{self.args.protein_file_name}.pdb'), os.path.join(f"data/{pdb_id}_sidechain_vis", f'{pdb_id}_{self.args.protein_file_name}.pdb'))
+        # file = PDBFile(Chem.AddHs(combo))
+        # file.write(path=f'data/{pdb_id}_sidechain_vis/debug_sidechain_lig{sidechain_id}_{data["ligand"].fake_lig_type}.pdb')
+        # import pdb; pdb.set_trace()
         return data
 
     def get_fake_lig_id(self, data, idx):

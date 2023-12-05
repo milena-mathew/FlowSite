@@ -5,7 +5,7 @@ from collections import defaultdict
 import matplotlib
 import rdkit
 from rdkit import Geometry
-from rdkit.Chem import MolToPDBBlock, RemoveHs
+from rdkit.Chem import MolToPDBBlock, RemoveHs, AllChem
 from utils.featurize import read_molecule
 matplotlib.use('Agg')
 import numpy as np
