@@ -203,6 +203,7 @@ def parse_train_args(args=sys.argv[1:]):
 
     # Optional parameters for CS 236 Extension
     parser.add_argument('--sidechain_with_ligand', action='store_true', default=False, help='')
+    parser.add_argument('--sidechain_alternate', action='store_true', default=False, help='')
 
     args = parser.parse_args(args)
     return args

@@ -45,6 +45,7 @@ class ComplexDataset(Dataset):
 
         valid_complex_paths_path = os.path.join(self.full_cache_path,'valid_complex_paths.txt')
         lig_meta_data_path = os.path.join(self.full_cache_path,'lig_meta_data.npz')
+
         if args.await_preprocessing:
             while not os.path.exists(valid_complex_paths_path):
                 lg(f'Waiting for {valid_complex_paths_path} to be created')
@@ -90,11 +91,11 @@ class ComplexDataset(Dataset):
         assert len(valid_complex_paths) == len(lig_sizes)
         assert len(valid_complex_paths) > 0
         lg(f'Finished loading combined data of length: {len(valid_complex_paths)}')
-        if args.biounit1_only and self.data_source == 'moad':
+        if args.biounit1_only and self.data_source == 'moad': 
             filter_mask = [idx for idx, (path, size) in enumerate(zip(valid_complex_paths, lig_sizes)) if 'unit1' in path]
             filtered_paths, filtered_sizes, filtered_contacts = valid_complex_paths[filter_mask], lig_sizes[filter_mask], num_contacts[filter_mask]
             lg(f'Finished filtering for biounit1 to remain with: {len(filtered_paths)}')
-        else:
+        else: # Clearly allows multiple ligands
             filtered_paths, filtered_sizes, filtered_contacts = valid_complex_paths, lig_sizes, num_contacts
         if args.lm_embeddings:
             self.get_lm_embeddings(filtered_paths)
@@ -136,9 +137,15 @@ class ComplexDataset(Dataset):
         data = copy.deepcopy(self.get_data(idx))
 
         if self.fake_lig_ratio > 0 and np.random.rand() < self.fake_lig_ratio:
+            if self.args.sidechain_alternate:
+                lig_sizes = np.array([lig_data['ligand'].size for lig_data in data['ligand']])
+                res_in_contact = data['protein'].min_lig_dist < 4 # we want to select residues from here
+                fake_lig_id = torch.tensor(np.random.choice(np.where(res_in_contact)[0]))
+                data.fake_lig_id = fake_lig_id    
             del data['ligand']
             try:
-                fake_lig_id = self.get_fake_lig_id(data, idx)
+                if not self.args.sidechain_alternate:
+                    fake_lig_id = self.get_fake_lig_id(data, idx)
                 if fake_lig_id is None: # no fake ligand found
                     lg(f'No valid sidechains for fake ligands in {data.pdb_id}. Trying a new random complex instead now.')
                     return self.get(torch.randint(low=0, high=self.len(), size=(1,)).item())
@@ -149,20 +156,26 @@ class ComplexDataset(Dataset):
 
             try:
                 data['protein'].fake_lig_id = fake_lig_id
-                data['protein'].min_lig_dist = data['protein'].inter_res_dist[fake_lig_id]
+                data['protein'].min_lig_dist = data['protein'].inter_res_dist[fake_lig_id] # vector of distances against other residues
                 init_success = self.init_fake_lig(data, fake_lig_id)
                 data['ligand'].ccd_ids = np.array(['XXX'], dtype='<U3')
-                data['ligand'].num_components = np.array([1])
+                data['ligand'].num_components = np.array([1]) # increase this probably for multiligand
                 data['ligand'].name = 'fake_lig_' + data['ligand'].fake_lig_type
                 if not init_success:
                     lg(f'Could not initialize fake ligand with fake_lig_id {fake_lig_id} for {data.pdb_id}. Trying a new random complex instead now.')
                     return self.get(torch.randint(low=0, high=self.len(), size=(1,)).item())
                 # remove residue of fake ligand and residues that should be masked from protein graph
-                arange = torch.arange(len(data['protein'].pos))
-                valid_mask = (fake_lig_id - self.args.num_chain_masks > arange) | (arange > fake_lig_id + self.args.num_chain_masks) | (data['protein'].pdb_chain_id != data['protein'].pdb_chain_id[fake_lig_id]) | (data['protein'].inter_res_dist[fake_lig_id] > self.args.min_chain_mask_dist)
+                arange = torch.arange(len(data['protein'].pos)) # mask for range and distance from fake ligand
+                if self.args.sidechain_alternate:
+                    valid_mask = (fake_lig_id >= arange) | (arange <= fake_lig_id) | (data['protein'].pdb_chain_id != data['protein'].pdb_chain_id[fake_lig_id]) | (data['protein'].inter_res_dist[fake_lig_id] > self.args.min_chain_mask_dist)
+                else:
+                    valid_mask = (fake_lig_id - self.args.num_chain_masks > arange) | (arange > fake_lig_id + self.args.num_chain_masks) | (data['protein'].pdb_chain_id != data['protein'].pdb_chain_id[fake_lig_id]) | (data['protein'].inter_res_dist[fake_lig_id] > self.args.min_chain_mask_dist)
                 data = get_protein_subgraph(data, valid_mask, has_designable_mask=False)
-                data.num_ligs = valid_mask.sum()
-                data['ligand'].lig_choice_id = torch.tensor(0)
+                data.num_ligs = valid_mask.sum() # num ligands given by valid_mask... is that modified by protein_subgraph?
+                print(data.num_ligs, "num_ligs")
+                print(valid_mask, "valid_mask")
+                exit()
+                data['ligand'].lig_choice_id = torch.tensor(0) # this is probably how you choose the ligand
             except Exception as e:
                 lg(f'ERROR: when initializing fake ligand for {data.pdb_id} with fake_lig_id {fake_lig_id} and pdb_chain_id {data["protein"].pdb_chain_id[fake_lig_id]} and pdb_res_id {data["protein"].pdb_res_id[fake_lig_id]}. Trying a new random complex instead now.')
                 lg(e)
@@ -171,9 +184,14 @@ class ComplexDataset(Dataset):
             # right now data['ligand'] is a list of multiple ligands that bind to the protein. We randomly choose one. When using PDBBind there is only one option. The option --use_largest_lig will always choose the largest ligand satisfying the num_contacts and ligand size requriements.
             # also, the data['protein'].min_lig_dist is a len_protein x num_ligands matrix. One column for each ligand and we choose the corresponding one.
             lig_sizes = np.array([lig_data['ligand'].size for lig_data in data['ligand']])
-            res_in_contact = data['protein'].min_lig_dist < 4
+            res_in_contact = data['protein'].min_lig_dist < 4 # we want to select residues from here
             num_contacts = res_in_contact.sum(dim=0)
             valid_ids = np.where((num_contacts >= self.args.min_num_contacts) & (lig_sizes <= self.args.max_lig_size) & (lig_sizes >= self.args.min_lig_size))[0]
+            # ligands are valid if there is a minimum number of contacts around, ligand is small enough and large enough
+            
+            if self.args.sidechain_with_ligand:
+                sidechain_id = torch.tensor(np.random.choice(np.where(res_in_contact)[0]))
+                data.fake_lig_id = sidechain_id
 
             if len(valid_ids) == 0: # no ligands that are small enough and close enough to the protein
                 lg(f'Warning, no ligands of maximum size {self.args.max_lig_size} had min_num_contacts {self.args.min_num_contacts}. The number of contacts were {num_contacts} and sizes {[lig_data["ligand"].size for lig_data in data["ligand"]]}. This is in {data.pdb_id}. Sampling a new complex.')
@@ -182,22 +200,21 @@ class ComplexDataset(Dataset):
                 return self.get(torch.randint(low=0, high=self.len(), size=(1,)).item())
             if self.args.overfit_lig_idx is not None:
                 valid_ids = [self.args.overfit_lig_idx]
-            lig_choice_id = torch.tensor(np.random.choice(valid_ids))
+            lig_choice_id = torch.tensor(np.random.choice(valid_ids)) # randomly choose a ligand that is valid
             if self.args.use_largest_lig:
                 lig_choice_id = torch.tensor(valid_ids[np.argmax(lig_sizes[valid_ids])])
             assert not torch.isnan(data['protein'].pos).any()
-            lig_choice = copy.deepcopy(data['ligand'][lig_choice_id])
+            lig_choice = copy.deepcopy(data['ligand'][lig_choice_id]) # in PDBBind there's probably only 1 ligand
             del data['ligand']
-            data = self.update_data(data, lig_choice)
-            data['protein'].min_lig_dist = data['protein'].min_lig_dist[:, lig_choice_id]
+            data = self.update_data(data, lig_choice) # copy the details
+            data['protein'].min_lig_dist = data['protein'].min_lig_dist[:, lig_choice_id] # probably of size protein length x lig #
             data['protein'].fake_lig_id = -1
             data['ligand'].lig_choice_id = lig_choice_id
             data['ligand'].fake_lig_type = 'None'
             data['ligand'].rdkit_lig = "None"
-            data.num_ligs = torch.tensor(len(valid_ids))
+            data.num_ligs = torch.tensor(len(valid_ids)) # set the number of ligands to be multiple here though despite choosing one randomly?
             if self.args.sidechain_with_ligand:
                 try:
-                    sidechain_id = self.get_fake_lig_id(data, idx)
                     if sidechain_id is None: # no fake ligand found
                         lg(f'No valid sidechains for fake ligands in {data.pdb_id}. Trying a new random complex instead now.')
                         return self.get(torch.randint(low=0, high=self.len(), size=(1,)).item())
@@ -210,37 +227,38 @@ class ComplexDataset(Dataset):
         # get designable mask on designable residues
         data['protein'].designable_mask = torch.zeros_like(data['protein'].min_lig_dist).bool()
         data['protein'].designable_mask[data['protein'].min_lig_dist < self.args.design_residue_cutoff] = True
+        # may not be necessary for us
 
         try:
-            data = self.get_pocket(data)
+            data = self.get_pocket(data) # may need to be properly modified for multiligand/fake ligand
         except EmptyPocketException as e:
             lg(f'WARNING: Empty pocket for {data.pdb_id}. Sampling a new complex.')
             lg(e)
             return self.get(torch.randint(low=0, high=self.len(), size=(1,)).item())
 
-        if self.args.self_condition_inv:
-            data['protein'].input_feat = torch.zeros_like(data['protein'].feat) + len(atom_features_list['residues_canonical']) # mask out all the residues
-        if self.args.tfn_use_aa_identities:
+        #if self.args.self_condition_inv: # not relevant for us
+        #    data['protein'].input_feat = torch.zeros_like(data['protein'].feat) + len(atom_features_list['residues_canonical']) # mask out all the residues
+        if self.args.tfn_use_aa_identities: # might try, but not necessary
             data['protein'].input_feat = data['protein'].feat.clone()
         data.protein_sigma = (torch.square(data["protein"].pos).mean() ** 0.5)
-        if self.args.mask_lig_translation:
-            data['ligand'].pos -= data['ligand'].pos.mean(dim=0, keepdim=True)
-            data['ligand'].pos += data['protein'].pos.mean(dim=0, keepdim=True)
-        if self.args.mask_lig_rotation:
-            temp_lig_pos = data['ligand'].pos - data['ligand'].pos.mean(dim=0, keepdim=True)
-            temp_lig_pos = temp_lig_pos @ torch.from_numpy(Rotation.random().as_matrix()).float()
-            temp_lig_pos += data['ligand'].pos.mean(dim=0, keepdim=True)
-            data['ligand'].pos = temp_lig_pos
-        if self.args.mask_lig_pos:
-            center = data['ligand'].pos.mean(dim=0)
-            data['ligand'].pos = torch.randn_like(data['ligand'].pos)
-            data['ligand'].pos += center
-        if self.args.backbone_noise > 0:
-            data['protein'].pos += torch.randn_like(data['protein'].pos) * self.args.backbone_noise
-            data['protein'].pos_N += torch.randn_like(data['protein'].pos_N) * self.args.backbone_noise
-            data['protein'].pos_O += torch.randn_like(data['protein'].pos_O) * self.args.backbone_noise
-            data['protein'].pos_C += torch.randn_like(data['protein'].pos_C) * self.args.backbone_noise
-            data['protein'].pos_Cb += torch.randn_like(data['protein'].pos_Cb) * self.args.backbone_noise
+        #if self.args.mask_lig_translation: # not relevant
+        #    data['ligand'].pos -= data['ligand'].pos.mean(dim=0, keepdim=True)
+        #    data['ligand'].pos += data['protein'].pos.mean(dim=0, keepdim=True)
+        #if self.args.mask_lig_rotation: # not relevant
+        #    temp_lig_pos = data['ligand'].pos - data['ligand'].pos.mean(dim=0, keepdim=True)
+        #    temp_lig_pos = temp_lig_pos @ torch.from_numpy(Rotation.random().as_matrix()).float()
+        #    temp_lig_pos += data['ligand'].pos.mean(dim=0, keepdim=True)
+        #    data['ligand'].pos = temp_lig_pos
+        #if self.args.mask_lig_pos: # not relevant
+        #    center = data['ligand'].pos.mean(dim=0)
+        #    data['ligand'].pos = torch.randn_like(data['ligand'].pos)
+        #    data['ligand'].pos += center
+        #if self.args.backbone_noise > 0: # not relevant
+        #    data['protein'].pos += torch.randn_like(data['protein'].pos) * self.args.backbone_noise
+        #    data['protein'].pos_N += torch.randn_like(data['protein'].pos_N) * self.args.backbone_noise
+        #    data['protein'].pos_O += torch.randn_like(data['protein'].pos_O) * self.args.backbone_noise
+        #    data['protein'].pos_C += torch.randn_like(data['protein'].pos_C) * self.args.backbone_noise
+        #    data['protein'].pos_Cb += torch.randn_like(data['protein'].pos_Cb) * self.args.backbone_noise
 
         data.protein_size = data['protein'].pos.shape[0]
         data['protein'].inter_res_dist = None
@@ -266,21 +284,21 @@ class ComplexDataset(Dataset):
             pocket_mask = distances < radius
             pocket_center_mask = contact_res[pocket_mask]
             data = get_protein_subgraph(data, pocket_mask)
-        elif pocket_type == 'distance':
+        elif pocket_type == 'distance': # this is default
             assert self.args.pocket_residue_cutoff is not None, 'distance pocket requires a pocket_residue_cutoff'
             min_lig_distances = data['protein'].min_lig_dist
             if self.args.pocket_residue_cutoff_sigma > 0:
                 min_lig_distances += torch.randn_like(min_lig_distances) * self.args.pocket_residue_cutoff_sigma
-            data = get_protein_subgraph(data, min_lig_distances < self.args.pocket_residue_cutoff)
+            data = get_protein_subgraph(data, min_lig_distances < self.args.pocket_residue_cutoff) # get subgraph only for places where things are close enough
             pocket_center_mask = data['protein'].designable_mask
         elif pocket_type == 'ca_distance':
             assert self.args.pocket_residue_cutoff is not None, 'distance pocket requires a pocket_residue_cutoff'
             ca_distances = torch.cdist(data['protein'].pos, data['ligand'].pos).min(dim=1)[0]
             if self.args.pocket_residue_cutoff_sigma > 0:
                 ca_distances += torch.randn_like(ca_distances) * self.args.pocket_residue_cutoff_sigma
-            pocket_mask = ca_distances < self.args.pocket_residue_cutoff
+            pocket_mask = ca_distances < self.args.pocket_residue_cutoff # only residues close enough considered
             assert pocket_mask.sum() > 0, f'No pocket residues found for {data.pdb_id} with pocket_residue_cutoff {self.args.pocket_residue_cutoff}'
-            data = get_protein_subgraph(data, pocket_mask)
+            data = get_protein_subgraph(data, pocket_mask) # then get the protein subgraph
             pocket_center_mask = ca_distances[pocket_mask] < 8
             if pocket_center_mask.sum() == 0:
                 print(f'warning : No residues found for {data.pdb_id} with a CA within   8A for constructing the pocket center')
@@ -374,7 +392,7 @@ class ComplexDataset(Dataset):
         # remove residues that are close in the chain and less than 12A away
         arange = torch.arange(len(data['protein'].pos))
         valid_fake_lig_ids = []
-        for i in range(len(data['protein'].pos)):
+        for i in range(len(data['protein'].pos)): #num_chain_masks basically is some baseline for what part of protein you want to consider
             valid_mask = (i - self.args.num_chain_masks > arange) | (arange > i + self.args.num_chain_masks) | (data['protein'].pdb_chain_id != data['protein'].pdb_chain_id[i]) | (data['protein'].inter_res_dist[i] > self.args.min_chain_mask_dist)
             contact_mask = (data['protein'].inter_res_dist[i] < self.args.design_residue_cutoff)
             num_valid_contacts = (contact_mask & valid_mask).sum()

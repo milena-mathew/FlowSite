@@ -249,8 +249,8 @@ class TensorFieldNet(nn.Module):
             init_scalar_rec_na, _, _ = self.inv_embedder(data)
         else:
             init_scalar_rec_na = self.rec_node_init.expand(data['protein'].num_nodes, -1)
-        if self.args.self_condition_inv and self.args.residue_loss_weight > 0 and not self.args.no_tfn_self_condition_inv or self.args.tfn_use_aa_identities:
-            init_scalar_rec_na = init_scalar_rec_na + self.rec_node_embedder(data['protein'].input_feat) if isinstance(data['protein'].input_feat, torch.LongTensor) or isinstance(data['protein'].input_feat, torch.cuda.LongTensor) else self.inv_self_logit_embedder(data['protein'].input_feat)
+        #if self.args.self_condition_inv and self.args.residue_loss_weight > 0 and not self.args.no_tfn_self_condition_inv or self.args.tfn_use_aa_identities:
+        #    init_scalar_rec_na = init_scalar_rec_na + self.rec_node_embedder(data['protein'].input_feat) if isinstance(data['protein'].input_feat, torch.LongTensor) or isinstance(data['protein'].input_feat, torch.cuda.LongTensor) else self.inv_self_logit_embedder(data['protein'].input_feat)
         lig_ea = self.lig_edge_embedder(data['ligand', 'bond_edge', 'ligand'].edge_attr)
         lig_na = self.lig_node_embedder(data["ligand"].feat)
 
