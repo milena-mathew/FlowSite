@@ -171,10 +171,7 @@ class ComplexDataset(Dataset):
                 else:
                     valid_mask = (fake_lig_id - self.args.num_chain_masks > arange) | (arange > fake_lig_id + self.args.num_chain_masks) | (data['protein'].pdb_chain_id != data['protein'].pdb_chain_id[fake_lig_id]) | (data['protein'].inter_res_dist[fake_lig_id] > self.args.min_chain_mask_dist)
                 data = get_protein_subgraph(data, valid_mask, has_designable_mask=False)
-                data.num_ligs = valid_mask.sum() # num ligands given by valid_mask... is that modified by protein_subgraph?
-                print(data.num_ligs, "num_ligs")
-                print(valid_mask, "valid_mask")
-                exit()
+                data.num_ligs = valid_mask.sum()
                 data['ligand'].lig_choice_id = torch.tensor(0) # this is probably how you choose the ligand
             except Exception as e:
                 lg(f'ERROR: when initializing fake ligand for {data.pdb_id} with fake_lig_id {fake_lig_id} and pdb_chain_id {data["protein"].pdb_chain_id[fake_lig_id]} and pdb_res_id {data["protein"].pdb_res_id[fake_lig_id]}. Trying a new random complex instead now.')
