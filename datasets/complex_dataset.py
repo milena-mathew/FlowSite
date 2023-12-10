@@ -233,29 +233,29 @@ class ComplexDataset(Dataset):
             lg(e)
             return self.get(torch.randint(low=0, high=self.len(), size=(1,)).item())
 
-        #if self.args.self_condition_inv: # not relevant for us
-        #    data['protein'].input_feat = torch.zeros_like(data['protein'].feat) + len(atom_features_list['residues_canonical']) # mask out all the residues
+        if self.args.self_condition_inv: # not relevant for us
+           data['protein'].input_feat = torch.zeros_like(data['protein'].feat) + len(atom_features_list['residues_canonical']) # mask out all the residues
         if self.args.tfn_use_aa_identities: # might try, but not necessary
             data['protein'].input_feat = data['protein'].feat.clone()
         data.protein_sigma = (torch.square(data["protein"].pos).mean() ** 0.5)
-        #if self.args.mask_lig_translation: # not relevant
-        #    data['ligand'].pos -= data['ligand'].pos.mean(dim=0, keepdim=True)
-        #    data['ligand'].pos += data['protein'].pos.mean(dim=0, keepdim=True)
-        #if self.args.mask_lig_rotation: # not relevant
-        #    temp_lig_pos = data['ligand'].pos - data['ligand'].pos.mean(dim=0, keepdim=True)
-        #    temp_lig_pos = temp_lig_pos @ torch.from_numpy(Rotation.random().as_matrix()).float()
-        #    temp_lig_pos += data['ligand'].pos.mean(dim=0, keepdim=True)
-        #    data['ligand'].pos = temp_lig_pos
-        #if self.args.mask_lig_pos: # not relevant
-        #    center = data['ligand'].pos.mean(dim=0)
-        #    data['ligand'].pos = torch.randn_like(data['ligand'].pos)
-        #    data['ligand'].pos += center
-        #if self.args.backbone_noise > 0: # not relevant
-        #    data['protein'].pos += torch.randn_like(data['protein'].pos) * self.args.backbone_noise
-        #    data['protein'].pos_N += torch.randn_like(data['protein'].pos_N) * self.args.backbone_noise
-        #    data['protein'].pos_O += torch.randn_like(data['protein'].pos_O) * self.args.backbone_noise
-        #    data['protein'].pos_C += torch.randn_like(data['protein'].pos_C) * self.args.backbone_noise
-        #    data['protein'].pos_Cb += torch.randn_like(data['protein'].pos_Cb) * self.args.backbone_noise
+        if self.args.mask_lig_translation: # not relevant
+           data['ligand'].pos -= data['ligand'].pos.mean(dim=0, keepdim=True)
+           data['ligand'].pos += data['protein'].pos.mean(dim=0, keepdim=True)
+        if self.args.mask_lig_rotation: # not relevant
+           temp_lig_pos = data['ligand'].pos - data['ligand'].pos.mean(dim=0, keepdim=True)
+           temp_lig_pos = temp_lig_pos @ torch.from_numpy(Rotation.random().as_matrix()).float()
+           temp_lig_pos += data['ligand'].pos.mean(dim=0, keepdim=True)
+           data['ligand'].pos = temp_lig_pos
+        if self.args.mask_lig_pos: # not relevant
+           center = data['ligand'].pos.mean(dim=0)
+           data['ligand'].pos = torch.randn_like(data['ligand'].pos)
+           data['ligand'].pos += center
+        if self.args.backbone_noise > 0: # not relevant
+           data['protein'].pos += torch.randn_like(data['protein'].pos) * self.args.backbone_noise
+           data['protein'].pos_N += torch.randn_like(data['protein'].pos_N) * self.args.backbone_noise
+           data['protein'].pos_O += torch.randn_like(data['protein'].pos_O) * self.args.backbone_noise
+           data['protein'].pos_C += torch.randn_like(data['protein'].pos_C) * self.args.backbone_noise
+           data['protein'].pos_Cb += torch.randn_like(data['protein'].pos_Cb) * self.args.backbone_noise
 
         data.protein_size = data['protein'].pos.shape[0]
         data['protein'].inter_res_dist = None
@@ -337,6 +337,7 @@ class ComplexDataset(Dataset):
         data['protein'].pos_N -= data.pocket_center
         data['ligand'].pos -= data.pocket_center
 
+        # import shutil
         # rdkit_lig = data['ligand'].rdkit_lig
         # visualize_mol = Chem.Mol(rdkit_lig)
         # visualize_mol.RemoveAllConformers()
@@ -344,7 +345,11 @@ class ComplexDataset(Dataset):
         # for atom_idx, coord in enumerate(data['ligand'].pos):
         #     conformer.SetAtomPosition(atom_idx, Point3D(*(coord.tolist())))
         # visualize_mol.AddConformer(conformer)
-        # Chem.MolToPDBFile(rdkit_lig, 'data/test.pdb')
+        # pdb_id = data.pdb_id
+        # os.makedirs(f"data/{pdb_id}_sidechain_vis", exist_ok=True)
+        # shutil.copy(os.path.join(self.data_dir, pdb_id, f'{pdb_id}_ligand.mol2'), os.path.join(f"data/{pdb_id}_sidechain_vis", f'{pdb_id}_ligand.mol2'))
+        # shutil.copy(os.path.join(self.data_dir, pdb_id, f'{pdb_id}_{self.args.protein_file_name}.pdb'), os.path.join(f"data/{pdb_id}_sidechain_vis", f'{pdb_id}_{self.args.protein_file_name}.pdb'))
+        # Chem.MolToPDBFile(rdkit_lig, 'test.pdb') #os.path.join(f"data/{pdb_id}_sidechain_vis", f'{pdb_id}_sidechain_ligand.mol2'))
         # import pdb; pdb.set_trace()
         return data
 
@@ -352,6 +357,7 @@ class ComplexDataset(Dataset):
         fake_lig_atom_names = data['protein'].atom_names[data['protein'].atom_res_idx == sidechain_id]
         # Leaving this in, looks like outside of this function fake_lig_type is only used to name something 
         # so hopefully leaving this to change within the loop is fine eek
+        #import pdb; pdb.set_trace()
         data['ligand'].fake_lig_type = seq1(atom_features_list['residues_canonical'][data['protein'].feat[sidechain_id][0]])
         if data['protein'].feat[sidechain_id][0].item() == len(atom_features_list['residues_canonical']) - 1:
             lg(f'Warning, {data.pdb_id} has non canonical amino acid at lig_id {sidechain_id} and pdb_res_id {data["protein"].pdb_res_id[sidechain_id]} and pdb_chain_id {data["protein"].pdb_chain_id[sidechain_id]}. Trying a new random complex instead now.')

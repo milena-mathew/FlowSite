@@ -256,7 +256,7 @@ class FlowSiteModule(GeneralModule):
 
                 angle_loss = supervised_chi_loss(batch, angles, angles_idx_s=11 - self.args.num_angle_pred) if self.args.num_angle_pred > 0 else torch.tensor(0.0)
                 recovered_aa_angle_loss = get_recovered_aa_angle_loss(copy.deepcopy(batch), angles, res_pred, angles_idx_s=11-self.args.num_angle_pred) if self.args.num_angle_pred > 0 else torch.tensor(0.0)
-
+                
                 rmsd, centroid_rmsd, kabsch_rmsd = compute_rmsds(batch["ligand"].shadow_pos, x1, batch )
                 rmsd_out, centroid_rmsd_out, kabsch_rmsd_out = compute_rmsds(batch["ligand"].shadow_pos, x1_out, batch)
 

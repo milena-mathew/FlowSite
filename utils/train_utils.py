@@ -23,22 +23,22 @@ def get_unnorm_blosum_score(res_pred, res_true, batch_idx):
     return scatter_sum((blosum[res_pred, res_true]).float(), batch_idx, dim=-1) / scatter_sum((blosum[res_true,res_true]).float(), batch_idx, dim=-1)
 
 def compute_rmsds(true_pos, x0, batch):
-        rmsd = scatter_mean(torch.square(true_pos - x0).sum(-1), batch['ligand'].batch) ** 0.5
-        centroid = scatter_mean(x0, batch['ligand'].batch, 0)
-        true_cent = scatter_mean(true_pos, batch['ligand'].batch, 0)
-        cent_rmsd = torch.square(centroid - true_cent).sum(-1) ** 0.5
+    rmsd = scatter_mean(torch.square(true_pos - x0).sum(-1), batch['ligand'].batch) ** 0.5
+    centroid = scatter_mean(x0, batch['ligand'].batch, 0)
+    true_cent = scatter_mean(true_pos, batch['ligand'].batch, 0)
+    cent_rmsd = torch.square(centroid - true_cent).sum(-1) ** 0.5
 
-        kabsch_rmsd = []
-        for i in range(batch.num_graphs):
-            x0_ = x0[batch['ligand'].batch == i].cpu().numpy()
-            true_pos_ = true_pos[batch['ligand'].batch == i].cpu().numpy()
-            try:
-                kabsch_rmsd.append(
-                    Rotation.align_vectors(x0_, true_pos_)[1] / np.sqrt(x0_.shape[0])
-                )
-            except:
-                kabsch_rmsd.append(np.inf)
-        return rmsd.cpu().numpy(), cent_rmsd.cpu().numpy(), np.array(kabsch_rmsd)
+    kabsch_rmsd = []
+    for i in range(batch.num_graphs):
+        x0_ = x0[batch['ligand'].batch == i].cpu().numpy()
+        true_pos_ = true_pos[batch['ligand'].batch == i].cpu().numpy()
+        try:
+            kabsch_rmsd.append(
+                Rotation.align_vectors(x0_, true_pos_)[1] / np.sqrt(x0_.shape[0])
+            )
+        except:
+            kabsch_rmsd.append(np.inf)
+    return rmsd.cpu().numpy(), cent_rmsd.cpu().numpy(), np.array(kabsch_rmsd)
 
 def squared_difference(x, y):
     """Computes Squared difference between two arrays."""
