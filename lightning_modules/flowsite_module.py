@@ -305,7 +305,7 @@ class FlowSiteModule(GeneralModule):
 
 
     @torch.no_grad()
-    def flow_match_inference(self, batch, batch_idx=None, production_mode = True):
+    def flow_match_inference(self, batch, batch_idx=None, production_mode = False):
         # be careful, the meaning of x0 and x1 is reversed here in flow matching compared to diffusion
 
         x0 = sample_prior(batch, self.args.prior_scale , harmonic=not self.args.gaussian_prior)

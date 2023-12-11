@@ -136,6 +136,7 @@ class ComplexDataset(Dataset):
             idx = 0
         data = copy.deepcopy(self.get_data(idx))
 
+        self.fake_lig_ratio=self.args.fake_ratio_start
         if self.fake_lig_ratio > 0 and np.random.rand() < self.fake_lig_ratio:
             if self.args.sidechain_alternate:
                 lig_sizes = np.array([lig_data['ligand'].size for lig_data in data['ligand']])
